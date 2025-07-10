@@ -1,7 +1,7 @@
 # .gitignore
 
 # Python virtual environment
-venv/
+final-ai-env/
 *.pyc
 __pycache__/
 
