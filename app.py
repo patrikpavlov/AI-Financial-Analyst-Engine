@@ -1,7 +1,9 @@
 import streamlit as st
 import yfinance as yf
 import finnhub
+import json
 from datetime import datetime, timedelta
+import requests
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import RetrievalQA
@@ -31,8 +33,33 @@ def init_connections_and_models():
         model="gemini-2.5-flash",
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
+
     
     return finnhub_client, embeddings, llm
+
+def call_analyst_model(news_context: str):
+    """
+    Calls the custom fine-tuned model endpoint to get a sentiment analysis.
+    """
+    api_url = st.secrets["HF_API_URL"]
+    headers = {"Authorization": f"Bearer {st.secrets['HUGGINGFACE_API_KEY']}"}
+    
+    payload = {
+        "inputs": news_context,
+        "parameters": {"max_new_tokens": 50}
+    }
+    
+    response = requests.post(api_url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        try:
+            # The response is a list containing one dictionary
+            return response.json()[0]
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            return {"error": f"Failed to parse model response: {e}", "raw_output": response.text}
+    else:
+        return {"error": f"API call failed with status {response.status_code}", "details": response.text}
+
 
 # --- Main App Logic ---
 try:
@@ -52,7 +79,7 @@ if ticker:
     start_date, end_date = one_week_ago.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d')
     news_list = finnhub_client.company_news(ticker, _from=start_date, to=end_date)[:10]
 
-    tab1, tab2 = st.tabs(["📊 Price & News Headlines", "🤖 Chat with Recent News"])
+    tab1, tab2, tab3 = st.tabs(["📊 Price & News Headlines", "🤖 Chat with Recent News","Fine-Tuned Sentiment Analysis"])
 
 
     # --- Tab 1: Price, Info, and News Headlines ---
@@ -135,3 +162,35 @@ if ticker:
                     st.write(response.content)
                 except Exception as e:
                     st.error(f"An error occurred during question answering: {e}")
+    with tab3:
+        st.header(f"Generate Analyst Briefing for {ticker}")
+        st.write("This feature uses a custom-trained Llama 3 model to provide a sentiment analysis based on the latest news headlines.")
+
+        if not news_list:
+            st.info("No news headlines available to analyze.")
+        else:
+            if st.button("✨ Generate Analyst Briefing"):
+                with st.spinner("Calling custom model... Please wait, this can take a moment."):
+                    # Combine headlines into a single string for analysis
+                    news_context = "\n".join([item['headline'] for item in news_list])
+                    
+                    # Call the model
+                    result = call_analyst_model(news_context)
+                    
+                    if "error" in result:
+                        st.error(f"Could not generate briefing: {result['error']}")
+                        st.json(result)
+                    else:
+                        st.subheader("AI-Generated Sentiment")
+                        sentiment = result.get("sentiment", "N/A")
+                        
+                        if sentiment == "Positive":
+                            st.success(f"**{sentiment}** 👍")
+                        elif sentiment == "Negative":
+                            st.error(f"**{sentiment}** 👎")
+                        else:
+                            st.warning(f"**{sentiment}** 😐")
+                        
+                        st.write("---")
+                        st.write("**News Headlines Analyzed:**")
+                        st.text(news_context)
